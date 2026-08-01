@@ -1,0 +1,7 @@
+.git
+.gitignore
+.DS_Store
+yyb-server
+*.log
+resource/db/*.db-shm
+resource/db/*.db-wal

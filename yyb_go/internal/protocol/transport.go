@@ -19,7 +19,7 @@ type tcpProxy struct {
 	Port   string
 }
 
-func parseTCPProxy(value string) (*tcpProxy, error) {
+func ParseTCPProxy(value string) (*tcpProxy, error) {
 	if value == "" {
 		return nil, nil
 	}
@@ -37,7 +37,7 @@ func parseTCPProxy(value string) (*tcpProxy, error) {
 }
 
 func dialTCP(ctx context.Context, host string, port int, timeout time.Duration, proxyValue string, fallbackDirect bool) (net.Conn, error) {
-	proxy, err := parseTCPProxy(proxyValue)
+	proxy, err := ParseTCPProxy(proxyValue)
 	if err != nil {
 		return nil, err
 	}

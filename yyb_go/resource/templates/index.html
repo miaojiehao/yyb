@@ -564,82 +564,159 @@
     }
 
     .log-line {
-      padding: 10px 11px;
-      border-radius: var(--radius);
-      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 12px;
+    }
+
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      background: var(--bg-soft);
+    }
+
+    .login-card {
+      width: min(360px, calc(100vw - 48px));
+      background: var(--bg);
       border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 28px;
+      box-shadow: 0 12px 40px rgb(0 0 0 / 0.08);
+    }
+
+    .login-card h2 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
+
+    .login-card .brand-subtitle {
+      margin-bottom: 20px;
+    }
+
+    .login-card .field {
+      margin-bottom: 14px;
+    }
+
+    .login-card .btn {
+      width: 100%;
+    }
+
+    .login-error {
+      color: var(--danger);
+      font-size: 12px;
+      min-height: 18px;
+      margin: 10px 0 0;
+    }
+
+    .user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .user-chip strong {
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    .role-badge {
+      font-size: 11px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      max-height: 320px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .table th,
+    .table td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+
+    .table th {
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      font-weight: 650;
       color: var(--muted);
       font-size: 12px;
     }
 
-    .hidden {
+    .table .num {
+      text-align: right;
+    }
+
+    .mini-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .mini-form .input,
+    .mini-form .select {
+      flex: 1;
+      min-width: 130px;
+    }
+
+    [hidden] {
       display: none !important;
-    }
-
-    @media (max-width: 1120px) {
-      .overview,
-      .work-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .quick-actions {
-        min-width: 0;
-      }
-    }
-
-    @media (max-width: 760px) {
-      .topbar {
-        height: auto;
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 14px 16px;
-      }
-
-      .top-actions {
-        width: 100%;
-      }
-
-      .top-actions .btn,
-      .top-actions .status-pill {
-        flex: 1;
-      }
-
-      .shell {
-        padding: 16px;
-      }
-
-      .section-head {
-        align-items: flex-start;
-        flex-direction: column;
-      }
-
-      .panel-actions,
-      .inline-actions {
-        width: 100%;
-      }
-
-      .panel-actions .btn,
-      .inline-actions .btn {
-        flex: 1;
-      }
-
-      .account-strip {
-        grid-auto-columns: minmax(222px, 86vw);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 1ms !important;
-        animation-duration: 1ms !important;
-      }
     }
   </style>
 </head>
-<body>
+ <body>
+  <div class="login-overlay" id="loginOverlay" hidden>
+    <div class="login-card">
+      <h2>登录控制台</h2>
+      <p class="brand-subtitle">YYB Go 控制台需要身份认证</p>
+      <div class="field">
+        <label for="loginUser">用户名</label>
+        <input class="input" id="loginUser" autocomplete="username" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="loginPass">密码</label>
+        <input class="input" id="loginPass" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn primary" id="loginBtn" type="button">登录</button>
+      <p class="login-error" id="loginError"></p>
+    </div>
+  </div>
+
   <div class="app">
     <header class="topbar">
       <div class="brand">
@@ -651,8 +728,10 @@
       </div>
       <div class="top-actions">
         <span class="status-pill" id="healthPill"><span class="status-dot"></span><span>检测服务中</span></span>
+        <span class="user-chip" id="userChip" hidden><strong id="userName"></strong><span class="role-badge" id="userRole"></span></span>
         <a class="btn secondary" href="/docs/index.html">Swagger</a>
         <a class="btn primary" href="/scan">扫码添加</a>
+        <button class="btn secondary" id="logoutBtn" type="button" hidden>退出</button>
       </div>
     </header>
 
@@ -766,6 +845,85 @@
           </div>
         </aside>
       </section>
+
+      <section class="panel" aria-label="账号配置" id="accountConfigPanel" hidden>
+        <div class="section-head">
+          <div class="section-title">
+            <h3>账号网络配置</h3>
+            <p>为选中账号绑定独立出口代理与来源 IP 白名单（一号一 IP 规避异地登录风控）</p>
+          </div>
+          <div class="panel-actions">
+            <span class="user-chip" id="configTarget"></span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="config-grid">
+            <div class="field">
+              <label for="proxyInput">绑定代理 bound_proxy</label>
+              <input class="input" id="proxyInput" placeholder="socks5://host:port 或 http-connect://host:port" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="ipWhitelistInput">来源 IP 白名单 allowed_source_ips</label>
+              <input class="input" id="ipWhitelistInput" placeholder="1.2.3.4, 10.0.0.0/8（逗号分隔）" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+          <div class="inline-actions">
+            <button class="btn primary" id="saveConfigBtn" type="button">保存配置</button>
+            <button class="btn secondary" id="reloadConfigBtn" type="button">重新读取</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="管理面板" id="adminPanel" hidden>
+        <div class="section-head">
+          <div class="section-title">
+            <h3>管理面板</h3>
+            <p>用户账号与角色管理、操作审计日志查询</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="admin-grid">
+            <div>
+              <div class="section-title">
+                <h4>用户管理</h4>
+                <p>仅管理员可见</p>
+              </div>
+              <div class="table-wrap">
+                <table class="table" id="usersTable">
+                  <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>操作</th></tr></thead>
+                  <tbody id="usersTbody"></tbody>
+                </table>
+              </div>
+              <div class="mini-form">
+                <input class="input" id="newUserUser" placeholder="用户名" autocomplete="off" spellcheck="false">
+                <input class="input" id="newUserPass" type="password" placeholder="密码(≥6位)" autocomplete="new-password">
+                <select class="select" id="newUserRole">
+                  <option value="viewer">viewer</option>
+                  <option value="operator">operator</option>
+                  <option value="admin">admin</option>
+                </select>
+                <button class="btn primary" id="createUserBtn" type="button">创建用户</button>
+              </div>
+            </div>
+            <div>
+              <div class="section-title">
+                <h4>审计日志</h4>
+                <p>最近操作记录，仅管理员可见</p>
+              </div>
+              <div class="table-wrap">
+                <table class="table" id="auditTable">
+                  <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>目标</th><th>结果</th><th>来源 IP</th></tr></thead>
+                  <tbody id="auditTbody"></tbody>
+                </table>
+              </div>
+              <div class="inline-actions" style="margin-top:10px;">
+                <button class="btn secondary" id="reloadAuditBtn" type="button">刷新日志</button>
+                <button class="btn secondary" id="reloadUsersBtn" type="button">刷新用户</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -778,7 +936,10 @@
         { name: "operateWxData" }
       ],
       selectedOpenID: "",
-      lastResult: ""
+      lastResult: "",
+      user: null,
+      users: [],
+      auditLogs: []
     };
 
     const $ = id => document.getElementById(id);
@@ -796,6 +957,14 @@
       const options = { method, headers: { "Content-Type": "application/json" } };
       if (body !== undefined) options.body = JSON.stringify(body);
       const response = await fetch(url, options);
+      if (response.status === 401 && url !== "/auth/login") {
+        state.user = null;
+        showLogin("登录已过期，请重新登录。");
+        const error = new Error("未认证");
+        error.status = 401;
+        error.code = 401;
+        throw error;
+      }
       const text = await response.text();
       let data = null;
       try {
@@ -841,6 +1010,31 @@
       return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
 
+    function showLogin(message) {
+      state.user = null;
+      $("loginOverlay").hidden = false;
+      $("userChip").hidden = true;
+      $("logoutBtn").hidden = true;
+      $("loginError").textContent = message || "";
+      $("loginUser").focus();
+    }
+
+    function hideLogin() {
+      $("loginOverlay").hidden = true;
+      $("userChip").hidden = false;
+      $("logoutBtn").hidden = false;
+    }
+
+    function renderUser() {
+      const user = state.user;
+      if (!user) return;
+      $("userName").textContent = user.username;
+      $("userRole").textContent = user.role;
+      $("adminPanel").hidden = user.role !== "admin";
+      $("accountConfigPanel").hidden = false;
+      $("configTarget").textContent = "";
+    }
+
     function setActivity(message) {
       $("activityLine").textContent = message;
     }
@@ -879,6 +1073,7 @@
       if (!state.accounts.length) {
         strip.innerHTML = `<div class="empty-state">暂无账号，点击“添加账号”开始扫码。</div>`;
         state.selectedOpenID = "";
+        fillConfig(null);
         renderStats();
         return;
       }
@@ -913,11 +1108,13 @@
         button.addEventListener("click", () => {
           state.selectedOpenID = account.openid;
           syncSelectedAccount();
+          loadAccountConfig();
           setActivity(`已选择账号：${name}`);
         });
         strip.appendChild(button);
       }
       renderStats();
+      loadAccountConfig();
     }
 
     function renderFeatures() {
@@ -955,6 +1152,238 @@
         pill.classList.add("bad");
         pill.classList.remove("ok");
         pill.querySelector("span:last-child").textContent = "服务异常";
+      }
+    }
+
+    async function initAuth() {
+      try {
+        state.user = await api("GET", "/auth/me");
+        hideLogin();
+        renderUser();
+        loadAccounts();
+        loadFeatures();
+        loadAuditLogs();
+        loadUsers();
+        loadAccountConfig();
+        return true;
+      } catch (error) {
+        if (error.status === 401) {
+          showLogin("");
+          return false;
+        }
+        showLogin(error.message);
+        return false;
+      }
+    }
+
+    async function doLogin() {
+      const username = $("loginUser").value.trim();
+      const password = $("loginPass").value;
+      if (!username || !password) {
+        $("loginError").textContent = "请输入用户名和密码。";
+        return;
+      }
+      $("loginBtn").disabled = true;
+      $("loginBtn").textContent = "登录中";
+      try {
+        await api("POST", "/auth/login", { username, password });
+        $("loginError").textContent = "";
+        $("loginPass").value = "";
+        await initAuth();
+      } catch (error) {
+        $("loginError").textContent = error.message || "登录失败";
+      } finally {
+        $("loginBtn").disabled = false;
+        $("loginBtn").textContent = "登录";
+      }
+    }
+
+    async function doLogout() {
+      try {
+        await api("POST", "/auth/logout");
+      } catch {
+        // 忽略登出接口异常，直接回到登录态
+      }
+      showLogin("已退出登录。");
+      state.accounts = [];
+      $("accountStrip").innerHTML = `<div class="empty-state">请先登录</div>`;
+    }
+
+    function fillConfig(account) {
+      const ref = account ? account.openid : "";
+      $("configTarget").textContent = ref ? `已选择：${accountName(account)}` : "未选择账号";
+      const isAdminOrOperator = state.user && state.user.role !== "viewer";
+      $("saveConfigBtn").disabled = !isAdminOrOperator;
+      if (!ref) {
+        $("proxyInput").value = "";
+        $("ipWhitelistInput").value = "";
+        return;
+      }
+      $("proxyInput").value = account.bound_proxy || "";
+      $("ipWhitelistInput").value = Array.isArray(account.allowed_source_ips)
+        ? account.allowed_source_ips.join(", ")
+        : (account.allowed_source_ips || "");
+    }
+
+    async function loadAccountConfig() {
+      const account = selectedAccount();
+      if (!account) {
+        $("configTarget").textContent = "未选择账号";
+        $("saveConfigBtn").disabled = true;
+        return;
+      }
+      try {
+        const config = await api("GET", `/accounts/${encodeURIComponent(account.openid)}/config`);
+        if (selectedAccount() && selectedAccount().openid === account.openid) {
+          $("proxyInput").value = config.bound_proxy || "";
+          $("ipWhitelistInput").value = Array.isArray(config.allowed_source_ips)
+            ? config.allowed_source_ips.join(", ")
+            : (config.allowed_source_ips || "");
+          $("configTarget").textContent = `已选择：${accountName(account)}`;
+        }
+      } catch (error) {
+        $("configTarget").textContent = `配置加载失败：${escapeHTML(error.message)}`;
+      }
+    }
+
+    async function saveAccountConfig() {
+      const account = selectedAccount();
+      if (!account) {
+        setResult("请先选择一个账号。", "缺少账号", true);
+        return;
+      }
+      const proxy = $("proxyInput").value.trim();
+      const rawIps = $("ipWhitelistInput").value.trim();
+      const allowedSourceIps = rawIps
+        ? rawIps.split(",").map(item => item.trim()).filter(Boolean).join(", ")
+        : "";
+      $("saveConfigBtn").disabled = true;
+      try {
+        const result = await api("POST", `/accounts/${encodeURIComponent(account.openid)}/config`, {
+          bound_proxy: proxy,
+          allowed_source_ips: allowedSourceIps
+        });
+        setResult(result, "账号配置已保存", false);
+        await loadAccounts();
+      } catch (error) {
+        setResult(error.data || error.message, "账号配置保存失败", true);
+      } finally {
+        $("saveConfigBtn").disabled = !(state.user && state.user.role !== "viewer");
+      }
+    }
+
+    function renderUsers() {
+      const tbody = $("usersTbody");
+      if (!state.users.length) {
+        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--muted)">暂无用户</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = state.users.map(user => `
+        <tr>
+          <td>${escapeHTML(user.id)}</td>
+          <td>${escapeHTML(user.username)}</td>
+          <td>
+            <select class="select" data-role-user="${escapeHTML(user.id)}" ${state.user && user.username === state.user.username ? "disabled" : ""}>
+              <option value="viewer" ${user.role === "viewer" ? "selected" : ""}>viewer</option>
+              <option value="operator" ${user.role === "operator" ? "selected" : ""}>operator</option>
+              <option value="admin" ${user.role === "admin" ? "selected" : ""}>admin</option>
+            </select>
+          </td>
+          <td>
+            <button class="btn small" data-del-user="${escapeHTML(user.id)}" ${state.user && user.username === state.user.username ? "disabled" : ""}>删除</button>
+          </td>
+        </tr>
+      `).join("");
+      tbody.querySelectorAll("[data-role-user]").forEach(select => {
+        select.addEventListener("change", async () => {
+          const id = select.dataset.roleUser;
+          try {
+            await api("PUT", `/auth/users/${encodeURIComponent(id)}/role`, { role: select.value });
+            setActivity("用户角色已更新");
+            loadUsers();
+            loadAuditLogs();
+          } catch (error) {
+            setActivity(`角色更新失败：${error.message}`);
+            loadUsers();
+          }
+        });
+      });
+      tbody.querySelectorAll("[data-del-user]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const id = button.dataset.delUser;
+          if (!confirm("确认删除该用户？")) return;
+          try {
+            await api("DELETE", `/auth/users/${encodeURIComponent(id)}`);
+            setActivity("用户已删除");
+            loadUsers();
+            loadAuditLogs();
+          } catch (error) {
+            setActivity(`删除失败：${error.message}`);
+          }
+        });
+      });
+    }
+
+    async function loadUsers() {
+      if (!state.user || state.user.role !== "admin") return;
+      try {
+        state.users = await api("GET", "/auth/users");
+        renderUsers();
+      } catch {
+        // 权限不足时静默忽略
+      }
+    }
+
+    async function createUser() {
+      const username = $("newUserUser").value.trim();
+      const password = $("newUserPass").value;
+      const role = $("newUserRole").value;
+      if (!username || password.length < 6) {
+        setActivity("创建用户失败：用户名必填且密码至少 6 位");
+        return;
+      }
+      try {
+        await api("POST", "/auth/users", { username, password, role });
+        $("newUserUser").value = "";
+        $("newUserPass").value = "";
+        setActivity("用户已创建");
+        loadUsers();
+        loadAuditLogs();
+      } catch (error) {
+        setActivity(`创建用户失败：${error.message}`);
+      }
+    }
+
+    function renderAuditLogs() {
+      const tbody = $("auditTbody");
+      if (!state.auditLogs.length) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted)">暂无审计记录</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = state.auditLogs.map(log => {
+        const ts = new Date(log.ts * 1000);
+        const pad = n => String(n).padStart(2, "0");
+        const time = `${pad(ts.getMonth() + 1)}-${pad(ts.getDate())} ${pad(ts.getHours())}:${pad(ts.getMinutes())}:${pad(ts.getSeconds())}`;
+        return `
+          <tr>
+            <td>${escapeHTML(time)}</td>
+            <td>${escapeHTML(log.operator)}</td>
+            <td>${escapeHTML(log.action)}</td>
+            <td>${escapeHTML(log.target_id || "-")}</td>
+            <td>${escapeHTML(log.result)}</td>
+            <td>${escapeHTML(log.source_ip || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function loadAuditLogs() {
+      if (!state.user || state.user.role !== "admin") return;
+      try {
+        state.auditLogs = await api("GET", "/audit/logs?limit=50");
+        renderAuditLogs();
+      } catch {
+        // 权限不足时静默忽略
       }
     }
 
@@ -1072,9 +1501,23 @@
       }
     });
 
+    $("loginBtn").addEventListener("click", doLogin);
+    $("loginUser").addEventListener("keydown", event => {
+      if (event.key === "Enter") $("loginPass").focus();
+    });
+    $("loginPass").addEventListener("keydown", event => {
+      if (event.key === "Enter") doLogin();
+    });
+    $("logoutBtn").addEventListener("click", doLogout);
+    $("saveConfigBtn").addEventListener("click", saveAccountConfig);
+    $("reloadConfigBtn").addEventListener("click", loadAccountConfig);
+    $("createUserBtn").addEventListener("click", createUser);
+    $("reloadAuditBtn").addEventListener("click", loadAuditLogs);
+    $("reloadUsersBtn").addEventListener("click", loadUsers);
+
     loadHealth();
     loadFeatures();
-    loadAccounts();
+    initAuth();
     setInterval(loadHealth, 15000);
   </script>
 </body>

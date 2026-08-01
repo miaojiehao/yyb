@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -17,20 +18,25 @@ import (
 	"github.com/gin-gonic/gin"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 
+	"yyb_go/internal/audit"
+	"yyb_go/internal/auth"
+	"yyb_go/internal/ipfilter"
 	"yyb_go/internal/protocol"
 	"yyb_go/internal/qr"
 	"yyb_go/internal/store"
 )
 
 type Config struct {
-	ResourceRoot   string
-	DBFilename     string
-	TCPProxy       string
-	SessionTTL     time.Duration
-	RequestTimeout time.Duration
-	AvatarTimeout  time.Duration
-	ScanTimeout    time.Duration
-	QRSessionTTL   time.Duration
+	ResourceRoot     string
+	DBFilename       string
+	TCPProxy         string
+	SessionTTL       time.Duration
+	RequestTimeout   time.Duration
+	AvatarTimeout    time.Duration
+	ScanTimeout      time.Duration
+	QRSessionTTL     time.Duration
+	AdminPassword    string
+	GlobalAllowedIPs string
 }
 
 type App struct {
@@ -39,6 +45,8 @@ type App struct {
 	db        *store.DB
 	pool      *protocol.Pool
 	qr        *qr.Client
+	sessions  *auth.Manager
+	ipMatcher *ipfilter.Matcher
 
 	mu         sync.Mutex
 	qrSessions map[string]*qr.Session
@@ -87,14 +95,27 @@ func NewApp(cfg Config) (*App, error) {
 	poolCfg.ShortlinkTimeout = cfg.RequestTimeout
 	poolCfg.TCPProxy = cfg.TCPProxy
 	pool := protocol.NewPool(poolCfg, db)
-	return &App{
+	app := &App{
 		cfg:        cfg,
 		resources:  res,
 		db:         db,
 		pool:       pool,
 		qr:         qr.NewClient(cfg.RequestTimeout),
+		sessions:   auth.NewManager(cfg.SessionTTL),
 		qrSessions: map[string]*qr.Session{},
-	}, nil
+	}
+	if err := app.ensureAdminUser(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if cfg.GlobalAllowedIPs != "" {
+		app.ipMatcher, err = ipfilter.Compile(cfg.GlobalAllowedIPs)
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid allowed-ips: %w", err)
+		}
+	}
+	return app, nil
 }
 
 func (a *App) Close() error {
@@ -111,27 +132,39 @@ func (a *App) Handler() http.Handler {
 
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(ipfilter.GlobalMiddleware(a.ipMatcher))
+	router.Use(auth.AuthMiddleware(a.sessions))
+
+	router.Any("/health", func(c *gin.Context) {
+		writeJSON(c.Writer, http.StatusOK, gin.H{"ok": true})
+	})
+	router.Any("/auth/login", a.handleLogin)
+	router.Any("/auth/logout", a.handleLogout)
+	router.Any("/scan", gin.WrapF(a.handleScan))
+	router.StaticFS("/static", http.Dir(a.resources.Static))
+	router.Any("/qr", gin.WrapF(a.handleQRRoot))
+	router.Any("/qr/*path", gin.WrapF(a.handleQR))
 
 	router.Any("/", gin.WrapF(a.handleIndex))
-	router.Any("/scan", gin.WrapF(a.handleScan))
 	router.Any("/docs", func(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, "/docs/index.html")
 	})
 	router.Any("/docs/*path", gin.WrapF(a.handleDocs))
 	router.Any("/openapi.json", gin.WrapF(a.handleOpenAPI))
-	router.Any("/health", func(c *gin.Context) {
-		writeJSON(c.Writer, http.StatusOK, gin.H{"ok": true})
-	})
-	router.StaticFS("/static", http.Dir(a.resources.Static))
-	router.Any("/qr", gin.WrapF(a.handleQRRoot))
-	router.Any("/qr/*path", gin.WrapF(a.handleQR))
+	router.Any("/auth/me", a.handleMe)
+	router.Any("/auth/password", a.handlePassword)
 	router.Any("/accounts", gin.WrapF(a.handleAccountsRoot))
 	router.Any("/accounts/avatar", gin.WrapF(a.handleAccountAvatar))
+	router.Any("/accounts/:ref/config", a.handleAccountConfig)
 	router.Any("/accounts/refresh", gin.WrapF(a.handleAccountRefresh))
 	router.Any("/accounts/resync", gin.WrapF(a.handleAccountResync))
 	router.Any("/wxapp/getCode", gin.WrapF(a.handleGetCode))
 	router.Any("/wxapp/getPhoneNumber", gin.WrapF(a.handleGetPhoneNumber))
 	router.Any("/wxapp/operateWxData", gin.WrapF(a.handleOperateWXData))
+	router.Any("/auth/users", a.handleUsersRoot)
+	router.Any("/auth/users/:id", a.handleUserByID)
+	router.Any("/auth/users/:id/role", a.handleUserRole)
+	router.Any("/audit/logs", a.handleAuditLogs)
 	router.NoRoute(func(c *gin.Context) {
 		writeError(c.Writer, http.StatusNotFound, "not found")
 	})
@@ -307,14 +340,21 @@ func (a *App) handleAccountsRoot(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodDelete:
+		if !a.requireRoleReq(w, r, auth.RoleAdmin, auth.RoleOperator) {
+			return
+		}
 		acc, ok := a.resolveAccountFromQuery(w, r)
 		if !ok {
+			return
+		}
+		if !a.checkAccountIPReq(w, r, acc) {
 			return
 		}
 		if err := a.db.DeleteAccount(r.Context(), acc.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		a.auditReq(w, r, audit.ActionAccountDelete, "account", acc.OpenID, "success", "")
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": acc.ID, "openid": acc.OpenID})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -346,6 +386,9 @@ func (a *App) handleAccountRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !a.requireRoleReq(w, r, auth.RoleAdmin, auth.RoleOperator) {
+		return
+	}
 	var body accountRefIn
 	if err := decodeOptionalJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -359,7 +402,11 @@ func (a *App) handleAccountRefresh(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.checkAccountIPReq(w, r, acc) {
+		return
+	}
 	status := a.refreshLiveness(r.Context(), acc)
+	a.auditReq(w, r, audit.ActionAccountRefresh, "account", acc.OpenID, map[bool]string{true: "success", false: "fail"}[status == "alive"], "status="+status)
 	writeJSON(w, http.StatusOK, refreshOut(acc, status))
 }
 
@@ -370,6 +417,9 @@ func (a *App) handleAccountResync(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !a.requireRoleReq(w, r, auth.RoleAdmin, auth.RoleOperator) {
 		return
 	}
 	var body accountRefIn
@@ -385,11 +435,16 @@ func (a *App) handleAccountResync(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.checkAccountIPReq(w, r, acc) {
+		return
+	}
 	updated, err := a.resyncProfile(r.Context(), acc)
 	if err != nil {
+		a.auditReq(w, r, audit.ActionAccountResync, "account", acc.OpenID, "fail", err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.auditReq(w, r, audit.ActionAccountResync, "account", acc.OpenID, "success", "")
 	writeJSON(w, http.StatusOK, updated.Public())
 }
 
@@ -439,6 +494,9 @@ type wxappRequest struct {
 type wxappCall func(ctx context.Context, acc *store.WechatAccount, appID string, payload map[string]any) (map[string]any, error)
 
 func (a *App) callWXApp(w http.ResponseWriter, r *http.Request, requirePayload bool, call wxappCall) {
+	if !a.requireRoleReq(w, r, auth.RoleAdmin, auth.RoleOperator) {
+		return
+	}
 	var body wxappRequest
 	if err := decodeOptionalJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -460,8 +518,12 @@ func (a *App) callWXApp(w http.ResponseWriter, r *http.Request, requirePayload b
 	if !ok {
 		return
 	}
+	if !a.checkAccountIPReq(w, r, acc) {
+		return
+	}
 	result, err := a.invokeWXApp(r.Context(), acc, body.AppID, body.Payload, call)
 	if err != nil {
+		a.auditReq(w, r, audit.ActionWXAppCall, "account", acc.OpenID, "fail", err.Error())
 		var expired accountExpiredError
 		switch {
 		case errors.As(err, &expired):
@@ -471,6 +533,7 @@ func (a *App) callWXApp(w http.ResponseWriter, r *http.Request, requirePayload b
 		}
 		return
 	}
+	a.auditReq(w, r, audit.ActionWXAppCall, "account", acc.OpenID, "success", "app_id="+body.AppID)
 	writeJSON(w, http.StatusOK, map[string]any{"openid": acc.OpenID, "result": result})
 }
 
@@ -599,7 +662,7 @@ type accountExpiredError struct{ openid string }
 func (e accountExpiredError) Error() string { return "account expired: " + e.openid }
 
 func (a *App) invokeWXApp(ctx context.Context, acc *store.WechatAccount, appID string, payload map[string]any, call wxappCall) (map[string]any, error) {
-	proxy := a.cfg.TCPProxy
+	proxy := effectiveAccountProxy(acc, a.cfg.TCPProxy)
 	if _, err := a.db.GetSession(ctx, acc.ID, proxy); err == nil {
 		result, err := call(ctx, acc, appID, payload)
 		if err == nil {
@@ -619,15 +682,15 @@ func (a *App) invokeWXApp(ctx context.Context, acc *store.WechatAccount, appID s
 }
 
 func (a *App) invokeGetCode(ctx context.Context, acc *store.WechatAccount, appID string, _ map[string]any) (map[string]any, error) {
-	return a.pool.GetCode(ctx, acc.LoginBuffer, appID, acc.ID, a.cfg.TCPProxy)
+	return a.pool.GetCode(ctx, acc.LoginBuffer, appID, acc.ID, effectiveAccountProxy(acc, a.cfg.TCPProxy))
 }
 
 func (a *App) invokeGetPhoneNumber(ctx context.Context, acc *store.WechatAccount, appID string, _ map[string]any) (map[string]any, error) {
-	return a.pool.GetPhoneNumber(ctx, acc.LoginBuffer, appID, acc.ID, a.cfg.TCPProxy)
+	return a.pool.GetPhoneNumber(ctx, acc.LoginBuffer, appID, acc.ID, effectiveAccountProxy(acc, a.cfg.TCPProxy))
 }
 
 func (a *App) invokeOperateWXData(ctx context.Context, acc *store.WechatAccount, appID string, payload map[string]any) (map[string]any, error) {
-	return a.pool.OperateWXData(ctx, acc.LoginBuffer, appID, payload, acc.ID, a.cfg.TCPProxy)
+	return a.pool.OperateWXData(ctx, acc.LoginBuffer, appID, payload, acc.ID, effectiveAccountProxy(acc, a.cfg.TCPProxy))
 }
 
 func refreshOut(acc *store.WechatAccount, status string) map[string]any {

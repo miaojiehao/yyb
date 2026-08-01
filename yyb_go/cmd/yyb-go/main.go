@@ -21,17 +21,21 @@ func main() {
 	resourceRoot := flag.String("resource-root", filepath.Join(".", "resource"), "runtime resource directory")
 	dbFilename := flag.String("db", httpapi.DefaultDBFilename, "SQLite database filename under resource/db")
 	tcpProxy := flag.String("tcp-proxy", "", "optional TCP proxy: socks5://host:port or http-connect://host:port")
+	adminPassword := flag.String("admin-password", "", "initial admin password (used only when no admin user exists)")
+	allowedIPs := flag.String("allowed-ips", "", "global source IP whitelist, comma separated IPs or CIDRs; empty disables")
 	flag.Parse()
 
 	cfg := httpapi.Config{
-		ResourceRoot:   *resourceRoot,
-		DBFilename:     *dbFilename,
-		TCPProxy:       *tcpProxy,
-		SessionTTL:     30 * time.Minute,
-		RequestTimeout: 8 * time.Second,
-		AvatarTimeout:  10 * time.Second,
-		ScanTimeout:    180 * time.Second,
-		QRSessionTTL:   5 * time.Minute,
+		ResourceRoot:     *resourceRoot,
+		DBFilename:       *dbFilename,
+		TCPProxy:         *tcpProxy,
+		SessionTTL:       30 * time.Minute,
+		RequestTimeout:   8 * time.Second,
+		AvatarTimeout:    10 * time.Second,
+		ScanTimeout:      180 * time.Second,
+		QRSessionTTL:     5 * time.Minute,
+		AdminPassword:    *adminPassword,
+		GlobalAllowedIPs: *allowedIPs,
 	}
 
 	app, err := httpapi.NewApp(cfg)

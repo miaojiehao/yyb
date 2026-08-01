@@ -1,0 +1,11 @@
+# binaries and logs
+*.log
+yyb_go/yyb-server
+node_modules/
+
+# sqlite runtime side files (main db file IS tracked for backup)
+yyb_go/resource/db/*.db-shm
+yyb_go/resource/db/*.db-wal
+
+# misc
+.DS_Store

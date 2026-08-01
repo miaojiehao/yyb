@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -51,6 +52,32 @@ CREATE TABLE IF NOT EXISTS features (
     description TEXT,
     enabled     INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    username        TEXT    NOT NULL UNIQUE,
+    password_hash   TEXT    NOT NULL,
+    role            TEXT    NOT NULL DEFAULT 'admin',
+    locked_until    INTEGER NOT NULL DEFAULT 0,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    last_login_at   INTEGER,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          INTEGER NOT NULL,
+    operator    TEXT    NOT NULL,
+    action      TEXT    NOT NULL,
+    target_type TEXT,
+    target_id   TEXT,
+    result      TEXT    NOT NULL,
+    detail      TEXT,
+    source_ip   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
 `
 
 var defaultFeatures = []Feature{
@@ -64,19 +91,21 @@ type DB struct {
 }
 
 type WechatAccount struct {
-	ID            int64          `json:"id"`
-	OpenID        string         `json:"openid"`
-	UIN           *int64         `json:"uin,omitempty"`
-	Alias         *string        `json:"alias,omitempty"`
-	Nickname      *string        `json:"nickname,omitempty"`
-	Avatar        *string        `json:"avatar,omitempty"`
-	UserInfo      map[string]any `json:"user_info,omitempty"`
-	LoginBuffer   string         `json:"login_buffer,omitempty"`
-	Credentials   map[string]any `json:"credentials,omitempty"`
-	Status        *string        `json:"status,omitempty"`
-	LastCheckedAt *int64         `json:"last_checked_at,omitempty"`
-	CreatedAt     int64          `json:"created_at"`
-	UpdatedAt     int64          `json:"updated_at"`
+	ID               int64          `json:"id"`
+	OpenID           string         `json:"openid"`
+	UIN              *int64         `json:"uin,omitempty"`
+	Alias            *string        `json:"alias,omitempty"`
+	Nickname         *string        `json:"nickname,omitempty"`
+	Avatar           *string        `json:"avatar,omitempty"`
+	UserInfo         map[string]any `json:"user_info,omitempty"`
+	LoginBuffer      string         `json:"login_buffer,omitempty"`
+	Credentials      map[string]any `json:"credentials,omitempty"`
+	Status           *string        `json:"status,omitempty"`
+	BoundProxy       string         `json:"bound_proxy,omitempty"`
+	AllowedSourceIPs string         `json:"allowed_source_ips,omitempty"`
+	LastCheckedAt    *int64         `json:"last_checked_at,omitempty"`
+	CreatedAt        int64          `json:"created_at"`
+	UpdatedAt        int64          `json:"updated_at"`
 }
 
 type AccountPublic struct {
@@ -110,6 +139,30 @@ type Feature struct {
 	Enabled     bool    `json:"enabled"`
 }
 
+type User struct {
+	ID            int64   `json:"id"`
+	Username      string  `json:"username"`
+	PasswordHash  string  `json:"-"`
+	Role          string  `json:"role"`
+	LockedUntil   int64   `json:"locked_until"`
+	FailedAttempts int64  `json:"failed_attempts"`
+	LastLoginAt   *int64  `json:"last_login_at"`
+	CreatedAt     int64   `json:"created_at"`
+	UpdatedAt     int64   `json:"updated_at"`
+}
+
+type AuditEntry struct {
+	ID         int64  `json:"id"`
+	TS         int64  `json:"ts"`
+	Operator   string `json:"operator"`
+	Action     string `json:"action"`
+	TargetType string `json:"target_type,omitempty"`
+	TargetID   string `json:"target_id,omitempty"`
+	Result     string `json:"result"`
+	Detail     string `json:"detail,omitempty"`
+	SourceIP   string `json:"source_ip,omitempty"`
+}
+
 func Open(path string) (*DB, error) {
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -138,6 +191,10 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	if _, err = db.ExecContext(ctx, schema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err = migrateAccountSecurityColumns(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -203,6 +260,48 @@ func sqliteTableExists(ctx context.Context, db *sql.DB, name string) (bool, erro
 	var n int
 	err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n)
 	return n > 0, err
+}
+
+func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func migrateAccountSecurityColumns(ctx context.Context, db *sql.DB) error {
+	for _, col := range []struct {
+		name string
+		ddl  string
+	}{
+		{"bound_proxy", "ALTER TABLE wechat_accounts ADD COLUMN bound_proxy TEXT"},
+		{"allowed_source_ips", "ALTER TABLE wechat_accounts ADD COLUMN allowed_source_ips TEXT"},
+	} {
+		ok, err := sqliteColumnExists(ctx, db, "wechat_accounts", col.name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if _, err := db.ExecContext(ctx, col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (db *DB) UpsertAccount(ctx context.Context, openid, loginBuffer string, alias, nickname, avatar *string, userInfo map[string]any, credentials map[string]any, status *string) (*WechatAccount, error) {
@@ -320,6 +419,135 @@ func (db *DB) DeleteAccount(ctx context.Context, id int64) error {
 	return err
 }
 
+func (db *DB) GetAccountConfig(ctx context.Context, id int64) (*WechatAccount, error) {
+	return db.GetAccount(ctx, id)
+}
+
+func (db *DB) SetAccountConfig(ctx context.Context, id int64, boundProxy, allowedSourceIPs string) error {
+	_, err := db.sql.ExecContext(ctx,
+		"UPDATE wechat_accounts SET bound_proxy=?, allowed_source_ips=?, updated_at=? WHERE id=?",
+		boundProxy, allowedSourceIPs, time.Now().Unix(), id,
+	)
+	return err
+}
+
+func (db *DB) SetAccountProxy(ctx context.Context, id int64, boundProxy string) error {
+	_, err := db.sql.ExecContext(ctx,
+		"UPDATE wechat_accounts SET bound_proxy=?, updated_at=? WHERE id=?",
+		boundProxy, time.Now().Unix(), id,
+	)
+	return err
+}
+
+func (db *DB) GetUser(ctx context.Context, id int64) (*User, error) {
+	return db.scanUser(db.sql.QueryRowContext(ctx, selectUserSQL+" WHERE id=?", id))
+}
+
+func (db *DB) GetUserByName(ctx context.Context, username string) (*User, error) {
+	return db.scanUser(db.sql.QueryRowContext(ctx, selectUserSQL+" WHERE username=? COLLATE NOCASE", username))
+}
+
+func (db *DB) CreateUser(ctx context.Context, username, passwordHash, role string) (*User, error) {
+	now := time.Now().Unix()
+	_, err := db.sql.ExecContext(ctx,
+		"INSERT INTO admin_users(username, password_hash, role, created_at, updated_at) VALUES(?,?,?,?,?)",
+		username, passwordHash, role, now, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return db.GetUserByName(ctx, username)
+}
+
+func (db *DB) DeleteUser(ctx context.Context, id int64) error {
+	_, err := db.sql.ExecContext(ctx, "DELETE FROM admin_users WHERE id=?", id)
+	return err
+}
+
+func (db *DB) SetUserRole(ctx context.Context, id int64, role string) error {
+	_, err := db.sql.ExecContext(ctx, "UPDATE admin_users SET role=?, updated_at=? WHERE id=?", role, time.Now().Unix(), id)
+	return err
+}
+
+func (db *DB) SetUserPassword(ctx context.Context, id int64, passwordHash string) error {
+	_, err := db.sql.ExecContext(ctx, "UPDATE admin_users SET password_hash=?, updated_at=? WHERE id=?", passwordHash, time.Now().Unix(), id)
+	return err
+}
+
+func (db *DB) UpdateUserLoginMeta(ctx context.Context, id int64, lockedUntil int64, failedAttempts int64, lastLoginAt *int64) error {
+	_, err := db.sql.ExecContext(ctx,
+		"UPDATE admin_users SET locked_until=?, failed_attempts=?, last_login_at=?, updated_at=? WHERE id=?",
+		lockedUntil, failedAttempts, nullableInt(lastLoginAt), time.Now().Unix(), id,
+	)
+	return err
+}
+
+func (db *DB) ListUsers(ctx context.Context) ([]*User, error) {
+	rows, err := db.sql.QueryContext(ctx, selectUserSQL+" ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := scanUserRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) AppendAudit(ctx context.Context, e AuditEntry) error {
+	_, err := db.sql.ExecContext(ctx,
+		"INSERT INTO audit_logs(ts, operator, action, target_type, target_id, result, detail, source_ip) VALUES(?,?,?,?,?,?,?,?)",
+		e.TS, e.Operator, e.Action, e.TargetType, e.TargetID, e.Result, e.Detail, e.SourceIP,
+	)
+	return err
+}
+
+func (db *DB) QueryAudit(ctx context.Context, operator, action string, from, to int64, limit, offset int) ([]AuditEntry, error) {
+	where := make([]string, 0, 3)
+	args := make([]any, 0, 6)
+	if operator != "" {
+		where = append(where, "operator=?")
+		args = append(args, operator)
+	}
+	if action != "" {
+		where = append(where, "action=?")
+		args = append(args, action)
+	}
+	if from > 0 {
+		where = append(where, "ts>=?")
+		args = append(args, from)
+	}
+	if to > 0 {
+		where = append(where, "ts<=?")
+		args = append(args, to)
+	}
+	sqlText := "SELECT id, ts, operator, action, target_type, target_id, result, detail, source_ip FROM audit_logs"
+	if len(where) > 0 {
+		sqlText += " WHERE " + strings.Join(where, " AND ")
+	}
+	sqlText += " ORDER BY ts DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	rows, err := db.sql.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditEntry
+	for rows.Next() {
+		e, err := scanAuditRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) GetSession(ctx context.Context, accountID int64, tcpProxy string) (*SessionRow, error) {
 	row := db.sql.QueryRowContext(ctx,
 		"SELECT id, wechat_account_id, uin, tcp_proxy, session_blob, expires_at, created_at, updated_at FROM sessions WHERE wechat_account_id=? AND tcp_proxy=? AND expires_at>?",
@@ -431,7 +659,9 @@ func (a *WechatAccount) Public() AccountPublic {
 	}
 }
 
-const selectAccountSQL = `SELECT id, openid, uin, alias, nickname, avatar, user_info, login_buffer, credentials, status, last_checked_at, created_at, updated_at FROM wechat_accounts`
+const selectAccountSQL = `SELECT id, openid, uin, alias, nickname, avatar, user_info, login_buffer, credentials, status, bound_proxy, allowed_source_ips, last_checked_at, created_at, updated_at FROM wechat_accounts`
+
+const selectUserSQL = `SELECT id, username, password_hash, role, locked_until, failed_attempts, last_login_at, created_at, updated_at FROM admin_users`
 
 type accountScanner interface {
 	Scan(dest ...any) error
@@ -452,10 +682,13 @@ func scanAccountRows(row accountScanner) (*WechatAccount, error) {
 		alias, nickname, avatar sql.NullString
 		userJSON, credJSON      sql.NullString
 		status                  sql.NullString
+		boundProxy              sql.NullString
+		allowedIPs              sql.NullString
 	)
 	err := row.Scan(
 		&a.ID, &a.OpenID, &uin, &alias, &nickname, &avatar, &userJSON,
-		&a.LoginBuffer, &credJSON, &status, &lastChecked, &a.CreatedAt, &a.UpdatedAt,
+		&a.LoginBuffer, &credJSON, &status, &boundProxy, &allowedIPs,
+		&lastChecked, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -467,6 +700,8 @@ func scanAccountRows(row accountScanner) (*WechatAccount, error) {
 	a.Nickname = stringPtrFromNull(nickname)
 	a.Avatar = stringPtrFromNull(avatar)
 	a.Status = stringPtrFromNull(status)
+	a.BoundProxy = boundProxy.String
+	a.AllowedSourceIPs = allowedIPs.String
 	if lastChecked.Valid {
 		a.LastCheckedAt = &lastChecked.Int64
 	}
@@ -505,6 +740,35 @@ func scanFeature(row featureScanner) (Feature, error) {
 	f.Description = stringPtrFromNull(desc)
 	f.Enabled = enabled != 0
 	return f, nil
+}
+
+func (db *DB) scanUser(row accountScanner) (*User, error) {
+	return scanUserRows(row)
+}
+
+func scanUserRows(row accountScanner) (*User, error) {
+	var u User
+	var lastLogin sql.NullInt64
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.LockedUntil, &u.FailedAttempts, &lastLogin, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if lastLogin.Valid {
+		u.LastLoginAt = &lastLogin.Int64
+	}
+	return &u, nil
+}
+
+func scanAuditRows(row accountScanner) (AuditEntry, error) {
+	var e AuditEntry
+	var targetType, targetID, detail, sourceIP sql.NullString
+	if err := row.Scan(&e.ID, &e.TS, &e.Operator, &e.Action, &targetType, &targetID, &e.Result, &detail, &sourceIP); err != nil {
+		return AuditEntry{}, err
+	}
+	e.TargetType = targetType.String
+	e.TargetID = targetID.String
+	e.Detail = detail.String
+	e.SourceIP = sourceIP.String
+	return e, nil
 }
 
 func marshalNullable(v map[string]any) (sql.NullString, error) {
