@@ -2,6 +2,7 @@
 *.log
 yyb_go/yyb-server
 node_modules/
+scripts/backup.log
 
 # sqlite runtime side files (main db file IS tracked for backup)
 yyb_go/resource/db/*.db-shm

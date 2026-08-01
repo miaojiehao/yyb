@@ -21,7 +21,7 @@ except Exception as e:
 PY
 
 cd "$REPO"
-git add -A
+git add -A -- . ':(exclude)scripts/backup.log'
 if git diff --cached --quiet; then
   echo "$(date '+%F %T') no changes, skip" >> "$LOG"
   exit 0
